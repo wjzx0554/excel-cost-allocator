@@ -496,6 +496,31 @@ def _validate_scheme(scheme: AllocationScheme) -> None:
         raise ValueError(f"方案 {scheme.name} 的金额来源列无效。")
     if amount_source == "manual" and scheme.manual_amount is None:
         raise ValueError(f"方案 {scheme.name} 请选择手工金额。")
+    for rule in scheme.filter_rules or []:
+        _validate_filter_rule(rule, scheme.name)
+
+
+def _validate_filter_rule(rule: FilterRule, scheme_name: str = "") -> None:
+    label = f"方案 {scheme_name} 的" if scheme_name else ""
+    if not rule.column or rule.column < 1:
+        raise ValueError(f"{label}过滤条件字段无效。")
+    if not rule.operator:
+        raise ValueError(f"{label}过滤条件类型不能为空。")
+    if rule.operator not in {
+        "equals",
+        "not_equals",
+        "contains",
+        "not_contains",
+        "regex",
+        "blank",
+        "not_blank",
+    }:
+        raise ValueError(f"{label}过滤条件类型无效：{rule.operator}")
+    if rule.operator == "regex":
+        try:
+            re.compile(normalize_value(rule.value))
+        except re.error as exc:
+            raise ValueError(f"{label}正则表达式无效：{exc}") from exc
 
 
 def _build_filter_rules_for_scheme(scheme: AllocationScheme) -> List[FilterRule]:
@@ -719,9 +744,7 @@ def preview_workbook_batch(config: BatchAllocationConfig) -> BatchAllocationResu
             )
             target_total = _resolve_scheme_target_total(values_ws, data_start, max_row, scheme)
             if target_total != 0 and base_total <= 0:
-                status_target = target_total
-            else:
-                status_target = target_total
+                raise ValueError(f"方案 {scheme.name} 没有可参与分摊的行，无法分配非零费用。")
             participating_rows = sum(1 for item in rows if item.participates)
             scheme_results.append(
                 SchemeAllocationResult(
@@ -735,7 +758,7 @@ def preview_workbook_batch(config: BatchAllocationConfig) -> BatchAllocationResu
                     excluded_rows=len(rows) - participating_rows,
                     base_total=round_money(base_total),
                     target_total=round_money(target_total),
-                    distributed_total=round_money(status_target),
+                    distributed_total=round_money(target_total),
                 )
             )
     finally:

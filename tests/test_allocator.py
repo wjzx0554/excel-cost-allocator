@@ -253,6 +253,72 @@ def test_batch_allocation_rejects_duplicate_target_column(tmp_path: Path):
         raise AssertionError("Expected duplicate target column to be rejected")
 
 
+def test_preview_rejects_nonzero_amount_without_participating_base(tmp_path: Path):
+    input_path = tmp_path / "zero_base.xlsx"
+    output_path = tmp_path / "zero_base_out.xlsx"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "sheet1"
+    ws.append(["车间", "材料", "费用"])
+    ws.append(["一车间", 0, 0])
+    ws.append(["二车间", 0, 0])
+    wb.save(input_path)
+
+    config = BatchAllocationConfig(
+        input_path=str(input_path),
+        output_path=str(output_path),
+        sheet_name="sheet1",
+        header_row=1,
+        schemes=[
+            AllocationScheme("方案1", "manual", 3, [2], manual_amount=100),
+        ],
+    )
+
+    try:
+        preview_workbook_batch(config)
+    except ValueError as exc:
+        assert "没有可参与分摊的行" in str(exc)
+    else:
+        raise AssertionError("Expected preview to reject nonzero allocation with zero base")
+
+
+def test_invalid_regex_is_rejected_before_allocation(tmp_path: Path):
+    input_path = tmp_path / "invalid_regex.xlsx"
+    output_path = tmp_path / "invalid_regex_out.xlsx"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "sheet1"
+    ws.append(["车间", "材料", "费用"])
+    ws.append(["一车间", 100, 0])
+    wb.save(input_path)
+
+    config = BatchAllocationConfig(
+        input_path=str(input_path),
+        output_path=str(output_path),
+        sheet_name="sheet1",
+        header_row=1,
+        schemes=[
+            AllocationScheme(
+                "方案1",
+                "manual",
+                3,
+                [2],
+                manual_amount=100,
+                filter_rules=[FilterRule(column=1, operator="regex", value="[")],
+            ),
+        ],
+    )
+
+    try:
+        preview_workbook_batch(config)
+    except ValueError as exc:
+        assert "正则表达式无效" in str(exc)
+    else:
+        raise AssertionError("Expected invalid regex to be rejected")
+
+
 def test_create_sample_workbook(tmp_path: Path):
     path = tmp_path / "sample.xlsx"
     create_sample_workbook(str(path))
