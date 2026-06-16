@@ -1,7 +1,8 @@
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from pathlib import Path
-from typing import Dict, Iterable, List, Optional, Sequence, Set
+import re
+from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
 from openpyxl import load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
@@ -24,6 +25,13 @@ class ColumnInfo:
 
 
 @dataclass
+class FilterRule:
+    column: int
+    operator: str
+    value: str = ""
+
+
+@dataclass
 class AllocationConfig:
     input_path: str
     output_path: str
@@ -33,6 +41,8 @@ class AllocationConfig:
     allocation_columns: Sequence[int]
     filter_column: Optional[int] = None
     excluded_values: Optional[Set[str]] = None
+    filter_rules: Optional[Sequence[FilterRule]] = None
+    filter_logic: str = "OR"
     detail_sheet_name: str = "分摊明细"
 
 
@@ -184,6 +194,105 @@ def get_unique_values(
         wb.close()
 
 
+def preview_filter_matches(
+    file_path: str,
+    sheet_name: str,
+    header_row: int,
+    filter_rules: Sequence[FilterRule],
+    filter_logic: str = "OR",
+    sample_limit: int = 20,
+) -> Tuple[int, List[Tuple[int, str]]]:
+    wb = load_workbook(file_path, read_only=False, data_only=True)
+    try:
+        ws = wb[sheet_name]
+        matches = 0
+        samples: List[Tuple[int, str]] = []
+        for row in range(header_row + 1, ws.max_row + 1):
+            matched, reason = evaluate_filter_rules(ws, row, filter_rules, filter_logic)
+            if matched:
+                matches += 1
+                if len(samples) < sample_limit:
+                    samples.append((row, reason))
+        return matches, samples
+    finally:
+        wb.close()
+
+
+def evaluate_filter_rules(ws, row_number: int, rules: Sequence[FilterRule], logic: str = "OR") -> Tuple[bool, str]:
+    active_rules = [rule for rule in rules if rule.column and rule.operator]
+    if not active_rules:
+        return False, ""
+
+    results = []
+    reasons = []
+    for rule in active_rules:
+        cell_value = normalize_value(ws.cell(row_number, rule.column).value)
+        matched = _match_filter_rule(cell_value, rule)
+        results.append(matched)
+        if matched:
+            reasons.append(_filter_reason(rule, cell_value))
+
+    normalized_logic = (logic or "OR").upper()
+    if normalized_logic == "AND":
+        matched = all(results)
+    else:
+        matched = any(results)
+
+    return matched, "；".join(reasons) if matched else ""
+
+
+def build_legacy_filter_rules(filter_column: Optional[int], excluded_values: Optional[Set[str]]) -> List[FilterRule]:
+    if not filter_column:
+        return []
+    return [
+        FilterRule(column=filter_column, operator="equals", value=normalize_value(value))
+        for value in sorted(excluded_values or set(), key=normalize_value)
+    ]
+
+
+def _match_filter_rule(cell_value: str, rule: FilterRule) -> bool:
+    value = normalize_value(rule.value)
+    operator = rule.operator
+
+    if operator == "equals":
+        return cell_value == value
+    if operator == "not_equals":
+        return cell_value != value
+    if operator == "contains":
+        return value in cell_value
+    if operator == "not_contains":
+        return value not in cell_value
+    if operator == "regex":
+        try:
+            return re.search(value, cell_value) is not None
+        except re.error:
+            return False
+    if operator == "blank":
+        return cell_value == ""
+    if operator == "not_blank":
+        return cell_value != ""
+    return False
+
+
+def _filter_reason(rule: FilterRule, cell_value: str) -> str:
+    letter = get_column_letter(rule.column)
+    value = display_value(normalize_value(rule.value))
+    actual = display_value(cell_value)
+    labels = {
+        "equals": "等于",
+        "not_equals": "不等于",
+        "contains": "包含",
+        "not_contains": "不包含",
+        "regex": "正则",
+        "blank": "为空",
+        "not_blank": "非空",
+    }
+    label = labels.get(rule.operator, rule.operator)
+    if rule.operator in {"blank", "not_blank"}:
+        return f"{letter}列 {label}，实际值：{actual}"
+    return f"{letter}列 {label} {value}，实际值：{actual}"
+
+
 def allocate_workbook(config: AllocationConfig) -> AllocationResult:
     _validate_config(config)
 
@@ -197,7 +306,9 @@ def allocate_workbook(config: AllocationConfig) -> AllocationResult:
         values_ws = values_wb[config.sheet_name]
         data_start = config.header_row + 1
         max_row = values_ws.max_row
-        excluded_values = {normalize_value(v) for v in (config.excluded_values or set())}
+        filter_rules = list(config.filter_rules or [])
+        if not filter_rules:
+            filter_rules = build_legacy_filter_rules(config.filter_column, config.excluded_values)
 
         rows: List[RowAllocation] = []
         base_total = Decimal("0")
@@ -208,16 +319,17 @@ def allocate_workbook(config: AllocationConfig) -> AllocationResult:
                 for col in config.base_columns
             ]
             row_base_total = sum(base_values, Decimal("0"))
-            filter_value = (
-                normalize_value(values_ws.cell(row_number, config.filter_column).value)
-                if config.filter_column
-                else ""
+            filter_matched, filter_reason = evaluate_filter_rules(
+                values_ws,
+                row_number,
+                filter_rules,
+                config.filter_logic,
             )
+            filter_value = filter_reason
 
-            filtered_out = bool(config.filter_column and filter_value in excluded_values)
-            if filtered_out:
+            if filter_matched:
                 participates = False
-                reason = "过滤排除"
+                reason = filter_reason or "过滤排除"
             elif row_base_total <= 0:
                 participates = False
                 reason = "基数小于等于0"

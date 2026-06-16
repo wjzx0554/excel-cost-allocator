@@ -4,9 +4,11 @@ from openpyxl import Workbook, load_workbook
 
 from excel_cost_allocator.allocator import (
     AllocationConfig,
+    FilterRule,
     allocate_workbook,
     get_headers,
     get_unique_values,
+    preview_filter_matches,
 )
 
 
@@ -89,3 +91,28 @@ def test_unique_values_reads_filter_column(tmp_path: Path):
     wb.save(path)
 
     assert get_unique_values(str(path), "sheet1", 1, 1) == ["生产车间", "销售配货部", ""]
+
+
+def test_multi_rule_filter_logic_and_regex(tmp_path: Path):
+    path = tmp_path / "rules.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "sheet1"
+    ws.append(["车间", "备注", "金额"])
+    ws.append(["生产车间", "临时", 10])
+    ws.append(["销售配货部", "正式", 20])
+    ws.append(["售后服务部", "临时", 30])
+    wb.save(path)
+
+    rules = [
+        FilterRule(column=1, operator="equals", value="销售配货部"),
+        FilterRule(column=2, operator="regex", value="^临时$"),
+    ]
+
+    count_or, samples_or = preview_filter_matches(str(path), "sheet1", 1, rules, "OR")
+    count_and, samples_and = preview_filter_matches(str(path), "sheet1", 1, rules, "AND")
+
+    assert count_or == 3
+    assert count_and == 0
+    assert len(samples_or) == 3
+    assert samples_and == []
