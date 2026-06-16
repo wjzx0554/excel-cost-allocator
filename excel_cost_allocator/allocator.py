@@ -107,17 +107,14 @@ def get_sheet_names(file_path: str) -> List[str]:
 
 
 def guess_header_row(file_path: str, sheet_name: str, max_scan_rows: int = 20) -> int:
-    wb = load_workbook(file_path, read_only=True, data_only=True)
+    wb = load_workbook(file_path, read_only=False, data_only=True)
     try:
         ws = wb[sheet_name]
         best_row = 1
         best_count = -1
         scan_to = min(ws.max_row, max_scan_rows)
         for row in range(1, scan_to + 1):
-            count = 0
-            for cell in ws[row]:
-                if normalize_value(cell.value):
-                    count += 1
+            count = _row_value_count(ws, row)
             if count > best_count:
                 best_count = count
                 best_row = row
@@ -127,16 +124,40 @@ def guess_header_row(file_path: str, sheet_name: str, max_scan_rows: int = 20) -
 
 
 def get_headers(file_path: str, sheet_name: str, header_row: int) -> List[ColumnInfo]:
-    wb = load_workbook(file_path, read_only=True, data_only=True)
+    wb = load_workbook(file_path, read_only=False, data_only=True)
     try:
         ws = wb[sheet_name]
+        max_column = _detect_used_max_column(ws, header_row)
         headers: List[ColumnInfo] = []
-        for col in range(1, ws.max_column + 1):
+        for col in range(1, max_column + 1):
             value = normalize_value(ws.cell(header_row, col).value)
             headers.append(ColumnInfo(col, get_column_letter(col), value))
         return headers
     finally:
         wb.close()
+
+
+def _row_value_count(ws, row_number: int) -> int:
+    count = 0
+    for (_row, _col), cell in ws._cells.items():
+        if _row == row_number and normalize_value(cell.value):
+            count += 1
+    return count
+
+
+def _detect_used_max_column(ws, header_row: int, scan_rows: int = 2000) -> int:
+    last_col = 0
+    max_scan_row = min(ws.max_row or header_row, header_row + scan_rows)
+
+    for (_row, _col), cell in ws._cells.items():
+        if header_row <= _row <= max_scan_row and normalize_value(cell.value):
+            last_col = max(last_col, _col)
+
+    for merged_range in ws.merged_cells.ranges:
+        if merged_range.min_row <= header_row <= merged_range.max_row:
+            last_col = max(last_col, merged_range.max_col)
+
+    return max(last_col, 1)
 
 
 def get_unique_values(
@@ -411,4 +432,3 @@ def _write_detail_sheet(
     detail.column_dimensions["A"].width = 10
     detail.column_dimensions["C"].width = 16
     detail.column_dimensions["D"].width = 18
-

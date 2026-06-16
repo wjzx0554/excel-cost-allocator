@@ -2,7 +2,7 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
-from excel_cost_allocator.allocator import AllocationConfig, allocate_workbook
+from excel_cost_allocator.allocator import AllocationConfig, allocate_workbook, get_headers
 
 
 def test_allocate_with_filter_and_multiple_targets(tmp_path: Path):
@@ -52,3 +52,20 @@ def test_allocate_with_filter_and_multiple_targets(tmp_path: Path):
     assert detail["D3"].value == 2
     assert detail["F3"].value == 1
 
+
+def test_headers_keep_trailing_blank_title_columns(tmp_path: Path):
+    path = tmp_path / "headers.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "sheet1"
+    ws["A1"] = "表头1"
+    ws["C1"] = "表头3"
+    ws["D2"] = 123
+    ws["F5"] = 456
+    wb.save(path)
+
+    headers = get_headers(str(path), "sheet1", 1)
+    assert len(headers) >= 6
+    assert headers[1].header == ""
+    assert headers[2].header == "表头3"
+    assert headers[5].header == ""
