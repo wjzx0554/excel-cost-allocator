@@ -2,7 +2,12 @@ from pathlib import Path
 
 from openpyxl import Workbook, load_workbook
 
-from excel_cost_allocator.allocator import AllocationConfig, allocate_workbook, get_headers
+from excel_cost_allocator.allocator import (
+    AllocationConfig,
+    allocate_workbook,
+    get_headers,
+    get_unique_values,
+)
 
 
 def test_allocate_with_filter_and_multiple_targets(tmp_path: Path):
@@ -69,3 +74,18 @@ def test_headers_keep_trailing_blank_title_columns(tmp_path: Path):
     assert headers[1].header == ""
     assert headers[2].header == "表头3"
     assert headers[5].header == ""
+
+
+def test_unique_values_reads_filter_column(tmp_path: Path):
+    path = tmp_path / "values.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "sheet1"
+    ws.append(["车间", "金额"])
+    ws.append(["生产车间", 10])
+    ws.append(["销售配货部", 20])
+    ws.append(["生产车间", 30])
+    ws.append([None, 40])
+    wb.save(path)
+
+    assert get_unique_values(str(path), "sheet1", 1, 1) == ["生产车间", "销售配货部", ""]

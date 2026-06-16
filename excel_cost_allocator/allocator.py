@@ -99,7 +99,7 @@ def round_money(value: Decimal) -> Decimal:
 
 
 def get_sheet_names(file_path: str) -> List[str]:
-    wb = load_workbook(file_path, read_only=True, data_only=False)
+    wb = load_workbook(file_path, read_only=False, data_only=False)
     try:
         return list(wb.sheetnames)
     finally:
@@ -167,7 +167,7 @@ def get_unique_values(
     column_index: int,
     max_values: int = 5000,
 ) -> List[str]:
-    wb = load_workbook(file_path, read_only=True, data_only=True)
+    wb = load_workbook(file_path, read_only=False, data_only=True)
     try:
         ws = wb[sheet_name]
         seen = set()
