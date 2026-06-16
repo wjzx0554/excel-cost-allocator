@@ -4,7 +4,7 @@ from pathlib import Path
 import re
 from typing import Dict, Iterable, List, Optional, Sequence, Set, Tuple
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
@@ -67,6 +67,59 @@ class AllocationResult:
     excluded_rows: int
     base_total: Decimal
     allocation_totals: Dict[int, Decimal]
+
+
+@dataclass
+class AllocationScheme:
+    name: str
+    amount_source: str
+    allocation_column: int
+    base_columns: Sequence[int]
+    filter_rules: Optional[Sequence[FilterRule]] = None
+    filter_logic: str = "OR"
+    amount_column: Optional[int] = None
+    manual_amount: Optional[Decimal] = None
+
+
+@dataclass
+class BatchAllocationConfig:
+    input_path: str
+    output_path: str
+    sheet_name: str
+    header_row: int
+    schemes: Sequence[AllocationScheme]
+    detail_sheet_name: str = "分摊明细"
+
+
+@dataclass
+class SchemeAllocationResult:
+    name: str
+    allocation_column: int
+    amount_source: str
+    amount_column: Optional[int]
+    manual_amount: Decimal
+    total_rows: int
+    participating_rows: int
+    excluded_rows: int
+    base_total: Decimal
+    target_total: Decimal
+    distributed_total: Decimal
+
+
+@dataclass
+class BatchAllocationResult:
+    output_path: str
+    total_rows: int
+    scheme_results: List[SchemeAllocationResult]
+
+
+@dataclass
+class SchemeRun:
+    scheme: AllocationScheme
+    rows: List[RowAllocation]
+    base_total: Decimal
+    target_total: Decimal
+    distributed_total: Decimal
 
 
 def normalize_value(value) -> str:
@@ -423,6 +476,442 @@ def _validate_config(config: AllocationConfig) -> None:
     if overlap:
         letters = ", ".join(get_column_letter(col) for col in sorted(overlap))
         raise ValueError(f"参与占比列和需要分配列不能重复：{letters}")
+
+
+def _validate_scheme(scheme: AllocationScheme) -> None:
+    if not scheme.name.strip():
+        raise ValueError("分摊方案名称不能为空。")
+    if not scheme.allocation_column or scheme.allocation_column < 1:
+        raise ValueError(f"方案 {scheme.name} 的分摊列无效。")
+    if not scheme.base_columns:
+        raise ValueError(f"方案 {scheme.name} 至少要选择一个占比计算列。")
+    if set(scheme.base_columns) & {scheme.allocation_column}:
+        letter = get_column_letter(scheme.allocation_column)
+        raise ValueError(f"方案 {scheme.name} 的分摊列不能同时作为占比计算列：{letter}")
+
+    amount_source = (scheme.amount_source or "column_total").strip()
+    if amount_source not in {"column_total", "manual"}:
+        raise ValueError(f"方案 {scheme.name} 的金额来源无效。")
+    if amount_source == "column_total" and scheme.amount_column is not None and scheme.amount_column < 1:
+        raise ValueError(f"方案 {scheme.name} 的金额来源列无效。")
+    if amount_source == "manual" and scheme.manual_amount is None:
+        raise ValueError(f"方案 {scheme.name} 请选择手工金额。")
+
+
+def _build_filter_rules_for_scheme(scheme: AllocationScheme) -> List[FilterRule]:
+    rules = list(scheme.filter_rules or [])
+    return rules
+
+
+def _prepare_row_allocations(
+    values_ws,
+    data_start: int,
+    max_row: int,
+    base_columns: Sequence[int],
+    filter_rules: Sequence[FilterRule],
+    filter_logic: str,
+) -> Tuple[List[RowAllocation], Decimal]:
+    rows: List[RowAllocation] = []
+    base_total = Decimal("0")
+
+    for row_number in range(data_start, max_row + 1):
+        base_values = [
+            parse_number(values_ws.cell(row_number, col).value)
+            for col in base_columns
+        ]
+        row_base_total = sum(base_values, Decimal("0"))
+        filter_matched, filter_reason = evaluate_filter_rules(
+            values_ws,
+            row_number,
+            filter_rules,
+            filter_logic,
+        )
+        filter_value = filter_reason
+
+        if filter_matched:
+            participates = False
+            reason = filter_reason or "过滤排除"
+        elif row_base_total <= 0:
+            participates = False
+            reason = "基数小于等于0"
+        else:
+            participates = True
+            reason = ""
+
+        effective_base = row_base_total if participates else Decimal("0")
+        base_total += effective_base
+        rows.append(
+            RowAllocation(
+                row_number=row_number,
+                participates=participates,
+                reason=reason,
+                filter_value=filter_value,
+                base_values=base_values,
+                base_total=row_base_total,
+                effective_base=effective_base,
+                ratio=Decimal("0"),
+                allocations={},
+            )
+        )
+
+    return rows, base_total
+
+
+def _resolve_scheme_target_total(values_ws, data_start: int, max_row: int, scheme: AllocationScheme) -> Decimal:
+    amount_source = (scheme.amount_source or "column_total").strip()
+    if amount_source == "manual":
+        return round_money(parse_number(scheme.manual_amount))
+
+    source_column = scheme.amount_column or scheme.allocation_column
+    total = sum(
+        parse_number(values_ws.cell(row_number, source_column).value)
+        for row_number in range(data_start, max_row + 1)
+    )
+    return round_money(total)
+
+
+def _apply_target_allocation(
+    ws,
+    rows: Sequence[RowAllocation],
+    target_column: int,
+    target_total: Decimal,
+    base_total: Decimal,
+) -> Decimal:
+    if target_total != 0 and base_total <= 0:
+        raise ValueError("没有可参与分摊的行，无法分配非零费用。")
+
+    rounded_sum = Decimal("0")
+    for item in rows:
+        item.ratio = item.effective_base / base_total if base_total > 0 else Decimal("0")
+        amount = round_money(target_total * item.ratio) if item.participates else Decimal("0")
+        item.allocations[target_column] = amount
+        rounded_sum += amount
+
+    residual = target_total - rounded_sum
+    residual_row = _find_residual_row(rows)
+    if residual_row is not None:
+        residual_row.allocations[target_column] = round_money(
+            residual_row.allocations[target_column] + residual
+        )
+
+    for item in rows:
+        cell = ws.cell(item.row_number, target_column)
+        cell.value = float(item.allocations[target_column])
+        cell.number_format = '#,##0.00'
+
+    return round_money(sum(item.allocations[target_column] for item in rows))
+
+
+def allocate_workbook_batch(config: BatchAllocationConfig) -> BatchAllocationResult:
+    _validate_batch_config(config)
+
+    input_path = Path(config.input_path)
+    keep_vba = input_path.suffix.lower() == ".xlsm"
+    formulas_wb = load_workbook(config.input_path, data_only=False, keep_vba=keep_vba)
+    values_wb = load_workbook(config.input_path, data_only=True, keep_vba=keep_vba)
+
+    try:
+        ws = formulas_wb[config.sheet_name]
+        values_ws = values_wb[config.sheet_name]
+        data_start = config.header_row + 1
+        max_row = values_ws.max_row
+        used_target_columns = set()
+        scheme_runs: List[SchemeRun] = []
+
+        for scheme in config.schemes:
+            _validate_scheme(scheme)
+            if scheme.allocation_column in used_target_columns:
+                raise ValueError(
+                    f"多个方案不能重复使用同一分摊列：{get_column_letter(scheme.allocation_column)}"
+                )
+            used_target_columns.add(scheme.allocation_column)
+
+            filter_rules = _build_filter_rules_for_scheme(scheme)
+            rows, base_total = _prepare_row_allocations(
+                values_ws,
+                data_start,
+                max_row,
+                scheme.base_columns,
+                filter_rules,
+                scheme.filter_logic,
+            )
+            target_total = _resolve_scheme_target_total(values_ws, data_start, max_row, scheme)
+            distributed_total = _apply_target_allocation(
+                ws,
+                rows,
+                scheme.allocation_column,
+                target_total,
+                base_total,
+            )
+            participating_rows = sum(1 for item in rows if item.participates)
+            scheme_runs.append(
+                SchemeRun(
+                    scheme=scheme,
+                    rows=rows,
+                    base_total=base_total,
+                    target_total=target_total,
+                    distributed_total=distributed_total,
+                )
+            )
+
+        _write_batch_detail_sheet(formulas_wb, config, scheme_runs, max_row - data_start + 1)
+        formulas_wb.save(config.output_path)
+    finally:
+        formulas_wb.close()
+        values_wb.close()
+
+    scheme_results: List[SchemeAllocationResult] = []
+    for run in scheme_runs:
+        participating_rows = sum(1 for item in run.rows if item.participates)
+        scheme_results.append(
+            SchemeAllocationResult(
+                name=run.scheme.name,
+                allocation_column=run.scheme.allocation_column,
+                amount_source=run.scheme.amount_source,
+                amount_column=run.scheme.amount_column,
+                manual_amount=round_money(parse_number(run.scheme.manual_amount)),
+                total_rows=len(run.rows),
+                participating_rows=participating_rows,
+                excluded_rows=len(run.rows) - participating_rows,
+                base_total=round_money(run.base_total),
+                target_total=round_money(run.target_total),
+                distributed_total=round_money(run.distributed_total),
+            )
+        )
+
+    total_rows = max((len(run.rows) for run in scheme_runs), default=0)
+    return BatchAllocationResult(
+        output_path=config.output_path,
+        total_rows=total_rows,
+        scheme_results=scheme_results,
+    )
+
+
+def preview_workbook_batch(config: BatchAllocationConfig) -> BatchAllocationResult:
+    _validate_batch_config(config)
+
+    input_path = Path(config.input_path)
+    keep_vba = input_path.suffix.lower() == ".xlsm"
+    values_wb = load_workbook(config.input_path, data_only=True, keep_vba=keep_vba)
+
+    try:
+        values_ws = values_wb[config.sheet_name]
+        data_start = config.header_row + 1
+        max_row = values_ws.max_row
+        used_target_columns = set()
+        scheme_results: List[SchemeAllocationResult] = []
+
+        for scheme in config.schemes:
+            _validate_scheme(scheme)
+            if scheme.allocation_column in used_target_columns:
+                raise ValueError(
+                    f"多个方案不能重复使用同一分摊列：{get_column_letter(scheme.allocation_column)}"
+                )
+            used_target_columns.add(scheme.allocation_column)
+
+            rows, base_total = _prepare_row_allocations(
+                values_ws,
+                data_start,
+                max_row,
+                scheme.base_columns,
+                _build_filter_rules_for_scheme(scheme),
+                scheme.filter_logic,
+            )
+            target_total = _resolve_scheme_target_total(values_ws, data_start, max_row, scheme)
+            if target_total != 0 and base_total <= 0:
+                status_target = target_total
+            else:
+                status_target = target_total
+            participating_rows = sum(1 for item in rows if item.participates)
+            scheme_results.append(
+                SchemeAllocationResult(
+                    name=scheme.name,
+                    allocation_column=scheme.allocation_column,
+                    amount_source=scheme.amount_source,
+                    amount_column=scheme.amount_column,
+                    manual_amount=round_money(parse_number(scheme.manual_amount)),
+                    total_rows=len(rows),
+                    participating_rows=participating_rows,
+                    excluded_rows=len(rows) - participating_rows,
+                    base_total=round_money(base_total),
+                    target_total=round_money(target_total),
+                    distributed_total=round_money(status_target),
+                )
+            )
+    finally:
+        values_wb.close()
+
+    return BatchAllocationResult(
+        output_path=config.output_path,
+        total_rows=max((item.total_rows for item in scheme_results), default=0),
+        scheme_results=scheme_results,
+    )
+
+
+def create_sample_workbook(output_path: str) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "测试数据"
+    ws.append(
+        [
+            "日期",
+            "车间",
+            "产品名称",
+            "产品类别",
+            "完工入库材料成本 wg_materialcost",
+            "本期人工费 laborcost",
+            "本期共耗料 consumptioncost",
+            "运费分摊",
+        ]
+    )
+    rows = [
+        ["2026-06", "一车间", "A产品", "成品", 10000, 3000, 0, 0],
+        ["2026-06", "二车间", "B产品", "成品", 20000, 5000, 0, 0],
+        ["2026-06", "销售配货部", "配货费用", "内部", 5000, 1000, 0, 0],
+        ["2026-06", "三车间", "C产品", "半成品", 15000, 4000, 0, 0],
+    ]
+    for row in rows:
+        ws.append(row)
+    for col in range(1, 9):
+        _header(ws, 1, col, ws.cell(1, col).value)
+        ws.column_dimensions[get_column_letter(col)].width = 18
+    for row in range(2, 6):
+        for col in range(5, 9):
+            ws.cell(row, col).number_format = '#,##0.00'
+    ws.freeze_panes = "A2"
+    wb.save(output_path)
+
+
+def _validate_batch_config(config: BatchAllocationConfig) -> None:
+    if not config.input_path:
+        raise ValueError("请选择 Excel 文件。")
+    if not config.output_path:
+        raise ValueError("请选择输出文件。")
+    if config.header_row < 1:
+        raise ValueError("表头行必须大于等于 1。")
+    if not config.schemes:
+        raise ValueError("请至少添加一个分摊方案。")
+
+
+def _format_amount_source_label(scheme: AllocationScheme) -> str:
+    amount_source = (scheme.amount_source or "column_total").strip()
+    if amount_source == "manual":
+        return f"手工金额 {round_money(parse_number(scheme.manual_amount))}"
+    source_column = scheme.amount_column or scheme.allocation_column
+    return f"列金额 {get_column_letter(source_column)}"
+
+
+def _write_batch_detail_sheet(
+    wb,
+    config: BatchAllocationConfig,
+    scheme_runs: Sequence[SchemeRun],
+    total_rows: int,
+) -> None:
+    if config.detail_sheet_name in wb.sheetnames:
+        del wb[config.detail_sheet_name]
+
+    detail = wb.create_sheet(config.detail_sheet_name)
+    detail.sheet_properties.tabColor = "5B9BD5"
+    detail["A1"] = "费用分摊明细"
+    detail["A1"].font = Font(size=15, bold=True, color="1F4E78")
+
+    detail["A2"] = "原工作表"
+    detail["B2"] = config.sheet_name
+    detail["C2"] = "表头行"
+    detail["D2"] = config.header_row
+    detail["E2"] = "方案数"
+    detail["F2"] = len(scheme_runs)
+    detail["A3"] = "数据行数"
+    detail["B3"] = total_rows
+    detail["C3"] = "参与方案总数"
+    detail["D3"] = sum(sum(1 for item in run.rows if item.participates) for run in scheme_runs)
+
+    summary_row = 5
+    summary_headers = [
+        "方案名称",
+        "分摊列",
+        "金额来源",
+        "原始/手工金额",
+        "参与行数",
+        "不参与行数",
+        "基数合计",
+        "分摊后合计",
+    ]
+    for col, title in enumerate(summary_headers, start=1):
+        _header(detail, summary_row, col, title)
+
+    for offset, run in enumerate(scheme_runs, start=1):
+        row = summary_row + offset
+        participating = sum(1 for item in run.rows if item.participates)
+        detail.cell(row, 1, run.scheme.name)
+        detail.cell(row, 2, get_column_letter(run.scheme.allocation_column))
+        detail.cell(row, 3, "手工输入" if (run.scheme.amount_source or "column_total") == "manual" else "取列总额")
+        detail.cell(row, 4, float(round_money(parse_number(run.scheme.manual_amount))) if (run.scheme.amount_source or "column_total") == "manual" else float(run.target_total))
+        detail.cell(row, 5, participating)
+        detail.cell(row, 6, len(run.rows) - participating)
+        detail.cell(row, 7, float(round_money(run.base_total)))
+        detail.cell(row, 8, float(round_money(run.distributed_total)))
+        for col in range(4, 9):
+            detail.cell(row, col).number_format = '#,##0.00'
+
+    cursor = summary_row + len(scheme_runs) + 3
+    for run in scheme_runs:
+        scheme = run.scheme
+        detail.cell(cursor, 1, f"方案：{scheme.name}")
+        detail.cell(cursor, 2, f"分摊列 {get_column_letter(scheme.allocation_column)}")
+        detail.cell(cursor, 3, f"金额来源 { _format_amount_source_label(scheme) }")
+        detail.cell(cursor, 4, f"规则关系 {scheme.filter_logic or 'OR'}")
+        detail.cell(cursor, 5, f"参与行数 {sum(1 for item in run.rows if item.participates)}")
+        cursor += 1
+
+        source_ws = wb[config.sheet_name]
+        source_headers = {
+            col: normalize_value(source_ws.cell(config.header_row, col).value) or get_column_letter(col)
+            for col in set(scheme.base_columns) | {scheme.allocation_column}
+        }
+
+        headers = ["源行号", "是否参与", "不参与原因", "过滤列值"]
+        headers.extend(
+            f"基数列 {get_column_letter(col)} - {source_headers[col]}"
+            for col in scheme.base_columns
+        )
+        headers.extend(["分摊基数", "占比", f"分摊结果 {get_column_letter(scheme.allocation_column)} - {source_headers[scheme.allocation_column]}"])
+        for col, title in enumerate(headers, start=1):
+            _header(detail, cursor, col, title)
+
+        for row_offset, item in enumerate(run.rows, start=1):
+            row = cursor + row_offset
+            col = 1
+            detail.cell(row, col, item.row_number)
+            col += 1
+            detail.cell(row, col, "是" if item.participates else "否")
+            col += 1
+            detail.cell(row, col, item.reason)
+            col += 1
+            detail.cell(row, col, item.filter_value)
+            col += 1
+            for value in item.base_values:
+                detail.cell(row, col, float(value))
+                detail.cell(row, col).number_format = '#,##0.00'
+                col += 1
+            detail.cell(row, col, float(item.effective_base))
+            detail.cell(row, col).number_format = '#,##0.00'
+            col += 1
+            detail.cell(row, col, float(item.ratio))
+            detail.cell(row, col).number_format = '0.0000%'
+            col += 1
+            detail.cell(row, col, float(item.allocations.get(scheme.allocation_column, Decimal("0"))))
+            detail.cell(row, col).number_format = '#,##0.00'
+
+        cursor = cursor + len(run.rows) + 2
+
+    detail.freeze_panes = detail["A6"]
+    for col in range(1, 24):
+        detail.column_dimensions[get_column_letter(col)].width = 16
+    detail.column_dimensions["A"].width = 10
+    detail.column_dimensions["B"].width = 10
+    detail.column_dimensions["C"].width = 18
+    detail.column_dimensions["D"].width = 18
 
 
 def _find_residual_row(rows: Iterable[RowAllocation]) -> Optional[RowAllocation]:
