@@ -103,7 +103,7 @@ class AllocatorApp(tk.Tk):
         self.filter_list = tk.Listbox(filter_frame, selectmode=tk.EXTENDED, exportselection=False, height=7)
         self.filter_list.grid(row=1, column=0, columnspan=3, sticky=tk.NSEW, pady=(8, 0), padx=(0, 12))
         filter_scroll = ttk.Scrollbar(filter_frame, orient=tk.VERTICAL, command=self.filter_list.yview)
-        filter_scroll.grid(row=1, column=2, sticky=tk.NSE, pady=(8, 0))
+        filter_scroll.grid(row=1, column=2, sticky="nse", pady=(8, 0))
         self.filter_list.configure(yscrollcommand=filter_scroll.set)
 
         self.manual_values = tk.Text(filter_frame, height=7, width=32)

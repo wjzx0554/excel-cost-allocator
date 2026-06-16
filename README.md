@@ -54,8 +54,8 @@ python -m pytest
 
 ## Win7 兼容说明
 
-项目使用 Python 3.8 和 Tkinter。Python 3.8 是最后一代适合 Win7 的官方 Python 主版本；GitHub Actions 中也固定使用 Python 3.8 和 PyInstaller 4.10，避免高版本运行时破坏 Win7 兼容性。
+项目使用 Python 3.8 和 Tkinter。Python 3.8 是最后一代适合 Win7 的官方 Python 主版本；GitHub Actions 使用 `windows-2022` 作为构建环境，并固定 Python 3.8 和 PyInstaller 4.10，尽量避免高版本运行时破坏 Win7 兼容性。
 
 Win7 机器如果缺少系统运行库，可能需要安装 Microsoft Visual C++ 2015-2019 Redistributable 或系统补丁。通常 32 位 exe 兼容面更广，64 位 exe 处理大文件更稳。
 
-注意：PyInstaller 官方文档对 Win7 的表述是“应该可用，但不正式支持”。所以项目同时构建 x86 和 x64 两个版本，建议先在目标 Win7 电脑上试 x86 版本。
+注意：GitHub 已在 2025-06-30 退役 `windows-2019` 托管环境，所以自动构建不能继续使用 `windows-2019`。PyInstaller 官方文档对 Win7 的表述是“应该可用，但不正式支持”。所以项目同时构建 x86 和 x64 两个版本，建议先在目标 Win7 电脑上试 x86 版本；如果要求 100% 按 Win7 环境构建，需要改用一台 Win7/Win10 老系统电脑作为 self-hosted runner。
