@@ -19,8 +19,10 @@ jobs:
         include:
           - arch: x86
             artifact: FanchanTool-win-x86
+            exe_name: FanchanTool-win-x86.exe
           - arch: x64
             artifact: FanchanTool-win-x64
+            exe_name: FanchanTool-win-x64.exe
 
     steps:
       - name: Checkout
@@ -45,7 +47,7 @@ jobs:
         run: |
           pyinstaller --noconfirm --clean --onefile --windowed --icon assets\app.ico --add-data "assets\app.ico;assets" --name FanchanTool main.py
           mkdir release
-          copy dist\FanchanTool.exe release\FanchanTool-${{ matrix.arch }}.exe
+          copy dist\FanchanTool.exe release\${{ matrix.exe_name }}
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
