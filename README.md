@@ -1,4 +1,4 @@
-# Excel 费用自动分摊工具
+# 分摊工具
 
 一个本地 Windows 桌面工具，用于把 Excel/WPS 表格中的费用列按指定基数列占比自动分摊。
 
@@ -43,14 +43,23 @@ python -m pytest
 
 把整个项目上传到 GitHub 后，GitHub Actions 会在每次 push 或手动运行时自动生成 Windows exe。
 
-生成位置：
+普通 push 或手动运行时，GitHub Actions 的 `Artifacts` 仍会以 zip 形式保存构建产物，这是 GitHub Actions 的默认机制。
+
+如果希望用户直接下载 `.exe`，请打一个版本标签发布 Release：
+
+```powershell
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+发布后下载位置：
 
 1. 打开 GitHub 仓库。
-2. 进入 `Actions`。
-3. 点击最新的 `Build Windows EXE`。
-4. 在页面底部 `Artifacts` 下载：
-   - `ExcelCostAllocator-win-x86`：32 位版本，适合 Win7 32 位，也可在 Win7 64 位运行。
-   - `ExcelCostAllocator-win-x64`：64 位版本，适合数据量较大且系统是 Win7 64 位的电脑。
+2. 进入 `Releases`。
+3. 打开对应版本。
+4. 在 `Assets` 里直接下载：
+   - `FanchanTool-win-x86.exe`：32 位版本，适合 Win7 32 位，也可在 Win7 64 位运行。
+   - `FanchanTool-win-x64.exe`：64 位版本，适合数据量较大且系统是 Win7 64 位的电脑。
 
 ## Win7 兼容说明
 

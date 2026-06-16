@@ -6,6 +6,9 @@ on:
     tags: ["v*"]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     name: Build ${{ matrix.arch }}
@@ -15,9 +18,9 @@ jobs:
       matrix:
         include:
           - arch: x86
-            artifact: ExcelCostAllocator-win-x86
+            artifact: FanchanTool-win-x86
           - arch: x64
-            artifact: ExcelCostAllocator-win-x64
+            artifact: FanchanTool-win-x64
 
     steps:
       - name: Checkout
@@ -39,12 +42,32 @@ jobs:
 
       - name: Build exe
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --name ExcelCostAllocator main.py
-          mkdir artifact
-          copy dist\ExcelCostAllocator.exe artifact\ExcelCostAllocator-${{ matrix.arch }}.exe
+          pyinstaller --noconfirm --clean --onefile --windowed --icon assets\app.ico --add-data "assets\app.ico;assets" --name FanchanTool main.py
+          mkdir release
+          copy dist\FanchanTool.exe release\FanchanTool-${{ matrix.arch }}.exe
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact }}
-          path: artifact\*.exe
+          path: release\*.exe
+
+  release:
+    name: Publish release assets
+    runs-on: windows-2022
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: FanchanTool-*
+          path: release-files
+          merge-multiple: true
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release-files/*.exe
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

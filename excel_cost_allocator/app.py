@@ -19,9 +19,12 @@ from .allocator import (
 class AllocatorApp(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Excel 费用自动分摊工具")
-        self.geometry("980x680")
-        self.minsize(900, 620)
+        self.title("分摊工具")
+        self.geometry("1080x720")
+        self.minsize(980, 660)
+        self.configure(bg="#f3f6fb")
+        self._set_window_icon()
+        self._setup_style()
 
         self.file_path = tk.StringVar()
         self.output_path = tk.StringVar()
@@ -35,24 +38,74 @@ class AllocatorApp(tk.Tk):
 
         self._build_ui()
 
+    def _asset_path(self, name):
+        base_dir = Path(getattr(__import__("sys"), "_MEIPASS", Path(__file__).resolve().parents[1]))
+        return base_dir / "assets" / name
+
+    def _set_window_icon(self):
+        icon_path = self._asset_path("app.ico")
+        if icon_path.exists():
+            try:
+                self.iconbitmap(str(icon_path))
+            except tk.TclError:
+                pass
+
+    def _setup_style(self):
+        self.style = ttk.Style(self)
+        try:
+            self.style.theme_use("clam")
+        except tk.TclError:
+            pass
+
+        self.default_font = ("Microsoft YaHei UI", 9)
+        self.title_font = ("Microsoft YaHei UI", 18, "bold")
+        self.subtitle_font = ("Microsoft YaHei UI", 9)
+        self.section_font = ("Microsoft YaHei UI", 10, "bold")
+
+        self.option_add("*Font", self.default_font)
+        self.style.configure("App.TFrame", background="#f3f6fb")
+        self.style.configure("Hero.TFrame", background="#173b78")
+        self.style.configure("Card.TLabelframe", background="#ffffff", bordercolor="#d8e0ee", relief="solid")
+        self.style.configure("Card.TLabelframe.Label", background="#ffffff", foreground="#0f172a", font=self.section_font)
+        self.style.configure("TLabel", background="#f3f6fb", foreground="#334155")
+        self.style.configure("Card.TLabel", background="#ffffff", foreground="#334155")
+        self.style.configure("HeroTitle.TLabel", background="#173b78", foreground="#ffffff", font=self.title_font)
+        self.style.configure("HeroSub.TLabel", background="#173b78", foreground="#dbeafe", font=self.subtitle_font)
+        self.style.configure("Status.TLabel", background="#eef4ff", foreground="#1e3a8a", padding=(10, 6))
+        self.style.configure("TEntry", fieldbackground="#ffffff", bordercolor="#cbd5e1", lightcolor="#cbd5e1", darkcolor="#cbd5e1")
+        self.style.configure("TCombobox", fieldbackground="#ffffff", bordercolor="#cbd5e1", arrowcolor="#1d4ed8")
+        self.style.configure("TButton", padding=(12, 6), background="#e2e8f0", foreground="#0f172a")
+        self.style.map("TButton", background=[("active", "#cbd5e1")])
+        self.style.configure("Primary.TButton", padding=(16, 8), background="#1d4ed8", foreground="#ffffff", font=("Microsoft YaHei UI", 10, "bold"))
+        self.style.map("Primary.TButton", background=[("active", "#1e40af"), ("disabled", "#93c5fd")])
+
     def _build_ui(self):
-        root = ttk.Frame(self, padding=10)
+        root = ttk.Frame(self, padding=12, style="App.TFrame")
         root.pack(fill=tk.BOTH, expand=True)
 
-        file_frame = ttk.LabelFrame(root, text="1. 选择文件和工作表", padding=8)
+        hero = ttk.Frame(root, padding=(18, 16), style="Hero.TFrame")
+        hero.pack(fill=tk.X)
+        ttk.Label(hero, text="分摊工具", style="HeroTitle.TLabel").pack(anchor=tk.W)
+        ttk.Label(
+            hero,
+            text="Excel/WPS 费用分摊、过滤排除、明细核对，一次配置后快速生成结果文件",
+            style="HeroSub.TLabel",
+        ).pack(anchor=tk.W, pady=(4, 0))
+
+        file_frame = ttk.LabelFrame(root, text="1. 选择文件和工作表", padding=10, style="Card.TLabelframe")
         file_frame.pack(fill=tk.X)
         file_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(file_frame, text="Excel 文件").grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
+        ttk.Label(file_frame, text="Excel 文件", style="Card.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
         ttk.Entry(file_frame, textvariable=self.file_path).grid(row=0, column=1, sticky=tk.EW)
         ttk.Button(file_frame, text="浏览", command=self.choose_file).grid(row=0, column=2, padx=(8, 0))
 
-        ttk.Label(file_frame, text="工作表").grid(row=1, column=0, sticky=tk.W, padx=(0, 8), pady=(8, 0))
+        ttk.Label(file_frame, text="工作表", style="Card.TLabel").grid(row=1, column=0, sticky=tk.W, padx=(0, 8), pady=(8, 0))
         self.sheet_combo = ttk.Combobox(file_frame, textvariable=self.sheet_name, state="readonly")
         self.sheet_combo.grid(row=1, column=1, sticky=tk.W, pady=(8, 0))
         self.sheet_combo.bind("<<ComboboxSelected>>", self.on_sheet_changed)
 
-        ttk.Label(file_frame, text="表头行").grid(row=1, column=2, sticky=tk.E, padx=(8, 4), pady=(8, 0))
+        ttk.Label(file_frame, text="表头行", style="Card.TLabel").grid(row=1, column=2, sticky=tk.E, padx=(8, 4), pady=(8, 0))
         ttk.Spinbox(
             file_frame,
             from_=1,
@@ -63,66 +116,96 @@ class AllocatorApp(tk.Tk):
         ).grid(row=1, column=3, sticky=tk.W, pady=(8, 0))
         ttk.Button(file_frame, text="读取表头", command=self.load_headers).grid(row=1, column=4, padx=(8, 0), pady=(8, 0))
 
-        select_frame = ttk.Frame(root)
+        select_frame = ttk.Frame(root, style="App.TFrame")
         select_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
         select_frame.columnconfigure(0, weight=1)
         select_frame.columnconfigure(1, weight=1)
 
-        base_frame = ttk.LabelFrame(select_frame, text="2. 选择参与占比计算的列", padding=8)
+        base_frame = ttk.LabelFrame(select_frame, text="2. 选择参与占比计算的列", padding=10, style="Card.TLabelframe")
         base_frame.grid(row=0, column=0, sticky=tk.NSEW, padx=(0, 5))
         base_frame.rowconfigure(0, weight=1)
         base_frame.columnconfigure(0, weight=1)
-        self.base_list = tk.Listbox(base_frame, selectmode=tk.EXTENDED, exportselection=False)
+        self.base_list = self._create_listbox(base_frame)
         self.base_list.grid(row=0, column=0, sticky=tk.NSEW)
         base_scroll = ttk.Scrollbar(base_frame, orient=tk.VERTICAL, command=self.base_list.yview)
         base_scroll.grid(row=0, column=1, sticky=tk.NS)
         self.base_list.configure(yscrollcommand=base_scroll.set)
 
-        target_frame = ttk.LabelFrame(select_frame, text="3. 选择需要分配的费用列", padding=8)
+        target_frame = ttk.LabelFrame(select_frame, text="3. 选择需要分配的费用列", padding=10, style="Card.TLabelframe")
         target_frame.grid(row=0, column=1, sticky=tk.NSEW, padx=(5, 0))
         target_frame.rowconfigure(0, weight=1)
         target_frame.columnconfigure(0, weight=1)
-        self.target_list = tk.Listbox(target_frame, selectmode=tk.EXTENDED, exportselection=False)
+        self.target_list = self._create_listbox(target_frame)
         self.target_list.grid(row=0, column=0, sticky=tk.NSEW)
         target_scroll = ttk.Scrollbar(target_frame, orient=tk.VERTICAL, command=self.target_list.yview)
         target_scroll.grid(row=0, column=1, sticky=tk.NS)
         self.target_list.configure(yscrollcommand=target_scroll.set)
 
-        filter_frame = ttk.LabelFrame(root, text="4. 设置不参与计算的过滤条件", padding=8)
+        filter_frame = ttk.LabelFrame(root, text="4. 设置不参与计算的过滤条件", padding=10, style="Card.TLabelframe")
         filter_frame.pack(fill=tk.BOTH, expand=True, pady=(10, 0))
         filter_frame.columnconfigure(1, weight=1)
         filter_frame.columnconfigure(3, weight=1)
         filter_frame.rowconfigure(1, weight=1)
 
-        ttk.Label(filter_frame, text="过滤列").grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
+        ttk.Label(filter_frame, text="过滤列", style="Card.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
         self.filter_combo = ttk.Combobox(filter_frame, textvariable=self.filter_column, state="readonly")
         self.filter_combo.grid(row=0, column=1, sticky=tk.EW)
         ttk.Button(filter_frame, text="读取过滤值", command=self.load_filter_values).grid(row=0, column=2, padx=(8, 12))
-        ttk.Label(filter_frame, text="手工补充值，一行一个").grid(row=0, column=3, sticky=tk.W)
+        ttk.Label(filter_frame, text="手工补充值，一行一个", style="Card.TLabel").grid(row=0, column=3, sticky=tk.W)
 
-        self.filter_list = tk.Listbox(filter_frame, selectmode=tk.EXTENDED, exportselection=False, height=7)
+        self.filter_list = self._create_listbox(filter_frame, height=7)
         self.filter_list.grid(row=1, column=0, columnspan=3, sticky=tk.NSEW, pady=(8, 0), padx=(0, 12))
         filter_scroll = ttk.Scrollbar(filter_frame, orient=tk.VERTICAL, command=self.filter_list.yview)
         filter_scroll.grid(row=1, column=2, sticky="nse", pady=(8, 0))
         self.filter_list.configure(yscrollcommand=filter_scroll.set)
 
-        self.manual_values = tk.Text(filter_frame, height=7, width=32)
+        self.manual_values = tk.Text(
+            filter_frame,
+            height=7,
+            width=32,
+            font=self.default_font,
+            bg="#ffffff",
+            fg="#0f172a",
+            relief=tk.SOLID,
+            bd=1,
+            insertbackground="#1d4ed8",
+            selectbackground="#bfdbfe",
+        )
         self.manual_values.grid(row=1, column=3, sticky=tk.NSEW, pady=(8, 0))
         self.manual_values.insert("1.0", "销售配货部")
 
-        output_frame = ttk.LabelFrame(root, text="5. 输出文件", padding=8)
+        output_frame = ttk.LabelFrame(root, text="5. 输出文件", padding=10, style="Card.TLabelframe")
         output_frame.pack(fill=tk.X, pady=(10, 0))
         output_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(output_frame, text="输出路径").grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
+        ttk.Label(output_frame, text="输出路径", style="Card.TLabel").grid(row=0, column=0, sticky=tk.W, padx=(0, 8))
         ttk.Entry(output_frame, textvariable=self.output_path).grid(row=0, column=1, sticky=tk.EW)
         ttk.Button(output_frame, text="另存为", command=self.choose_output).grid(row=0, column=2, padx=(8, 0))
 
-        action_frame = ttk.Frame(root)
+        action_frame = ttk.Frame(root, style="App.TFrame")
         action_frame.pack(fill=tk.X, pady=(10, 0))
-        ttk.Label(action_frame, textvariable=self.status_text).pack(side=tk.LEFT, fill=tk.X, expand=True)
-        self.run_button = ttk.Button(action_frame, text="开始分摊", command=self.run_allocation)
+        ttk.Label(action_frame, textvariable=self.status_text, style="Status.TLabel").pack(side=tk.LEFT, fill=tk.X, expand=True)
+        self.run_button = ttk.Button(action_frame, text="开始分摊", command=self.run_allocation, style="Primary.TButton")
         self.run_button.pack(side=tk.RIGHT)
+
+    def _create_listbox(self, parent, height=10):
+        return tk.Listbox(
+            parent,
+            selectmode=tk.EXTENDED,
+            exportselection=False,
+            height=height,
+            font=self.default_font,
+            bg="#ffffff",
+            fg="#0f172a",
+            relief=tk.SOLID,
+            bd=1,
+            highlightthickness=1,
+            highlightbackground="#d8e0ee",
+            highlightcolor="#1d4ed8",
+            selectbackground="#2563eb",
+            selectforeground="#ffffff",
+            activestyle="none",
+        )
 
     def choose_file(self):
         path = filedialog.askopenfilename(
