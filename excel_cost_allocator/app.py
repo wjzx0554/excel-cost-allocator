@@ -192,7 +192,6 @@ class AllocatorApp(tk.Tk):
         self.active_scheme_index = -1
         self.filter_rule_rows = []
         self.unique_value_cache = {}
-        self.help_contact_image = None
         self._loading_scheme = False
 
         self._build_ui()
@@ -537,22 +536,18 @@ class AllocatorApp(tk.Tk):
         help_scroll.grid(row=0, column=1, sticky=tk.NS)
         text.configure(yscrollcommand=help_scroll.set)
         text.tag_configure("center", justify=tk.CENTER)
+        text.tag_configure("support_title", justify=tk.CENTER, font=("Microsoft YaHei UI", 13, "bold"), foreground="#164078")
+        text.tag_configure("support_line", justify=tk.CENTER, font=("Microsoft YaHei UI", 11), foreground="#334155")
         text.tag_configure("intro_gap", spacing3=14)
-        self._insert_help_contact_image(text)
+        self._insert_help_support_block(text)
         text.insert(tk.END, HELP_TEXT)
         text.configure(state=tk.DISABLED)
 
-    def _insert_help_contact_image(self, text):
-        image_path = self._asset_path("contact_qr.png")
-        if not image_path.exists():
-            return
-        try:
-            self.help_contact_image = tk.PhotoImage(file=str(image_path))
-        except tk.TclError:
-            return
-        text.insert(tk.END, "\n", "center")
-        text.image_create(tk.END, image=self.help_contact_image, padx=0, pady=4)
-        text.insert(tk.END, "\n\n", ("center", "intro_gap"))
+    def _insert_help_support_block(self, text):
+        text.insert(tk.END, "技术支持\n", "support_title")
+        text.insert(tk.END, "A0金蝶软件王朝\n", "support_line")
+        text.insert(tk.END, "电话：15939121371（微信同号）\n", "support_line")
+        text.insert(tk.END, "河南 焦作\n\n", ("support_line", "intro_gap"))
 
     def _create_listbox(self, parent, height=10):
         return tk.Listbox(
