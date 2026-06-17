@@ -88,7 +88,7 @@ class BatchAllocationConfig:
     sheet_name: str
     header_row: int
     schemes: Sequence[AllocationScheme]
-    detail_sheet_name: str = "分摊明细"
+    detail_sheet_name: str = "分摊汇总"
 
 
 @dataclass
@@ -830,111 +830,243 @@ def _write_batch_detail_sheet(
     scheme_runs: Sequence[SchemeRun],
     total_rows: int,
 ) -> None:
-    if config.detail_sheet_name in wb.sheetnames:
-        del wb[config.detail_sheet_name]
+    _delete_batch_detail_sheets(wb, config.detail_sheet_name)
+    source_ws = wb[config.sheet_name]
+    summary_name = _unique_sheet_name(config.detail_sheet_name, set(wb.sheetnames))
+    summary = wb.create_sheet(summary_name)
+    summary.sheet_properties.tabColor = "5B9BD5"
+    summary["A1"] = "费用分摊汇总"
+    summary["A1"].font = Font(size=15, bold=True, color="1F4E78")
 
-    detail = wb.create_sheet(config.detail_sheet_name)
-    detail.sheet_properties.tabColor = "5B9BD5"
-    detail["A1"] = "费用分摊明细"
-    detail["A1"].font = Font(size=15, bold=True, color="1F4E78")
-
-    detail["A2"] = "原工作表"
-    detail["B2"] = config.sheet_name
-    detail["C2"] = "表头行"
-    detail["D2"] = config.header_row
-    detail["E2"] = "方案数"
-    detail["F2"] = len(scheme_runs)
-    detail["A3"] = "数据行数"
-    detail["B3"] = total_rows
-    detail["C3"] = "参与方案总数"
-    detail["D3"] = sum(sum(1 for item in run.rows if item.participates) for run in scheme_runs)
+    summary["A2"] = "原工作表"
+    summary["B2"] = config.sheet_name
+    summary["C2"] = "表头行"
+    summary["D2"] = config.header_row
+    summary["E2"] = "方案数"
+    summary["F2"] = len(scheme_runs)
+    summary["A3"] = "数据行数"
+    summary["B3"] = total_rows
+    summary["C3"] = "说明"
+    summary["D3"] = "每个方案已单独生成明细工作表"
 
     summary_row = 5
     summary_headers = [
         "方案名称",
+        "明细工作表",
         "分摊列",
         "金额来源",
-        "原始/手工金额",
+        "待分摊金额",
         "参与行数",
         "不参与行数",
         "基数合计",
         "分摊后合计",
+        "校验差额",
+        "规则关系",
     ]
     for col, title in enumerate(summary_headers, start=1):
-        _header(detail, summary_row, col, title)
+        _header(summary, summary_row, col, title)
 
+    used_names = set(wb.sheetnames)
     for offset, run in enumerate(scheme_runs, start=1):
+        sheet_name = _unique_sheet_name(
+            _clean_sheet_name(f"明细_{offset:02d}_{run.scheme.name}"),
+            used_names,
+        )
+        used_names.add(sheet_name)
+        _write_scheme_detail_sheet(
+            wb,
+            source_ws,
+            config,
+            run,
+            sheet_name,
+        )
+
         row = summary_row + offset
         participating = sum(1 for item in run.rows if item.participates)
-        detail.cell(row, 1, run.scheme.name)
-        detail.cell(row, 2, get_column_letter(run.scheme.allocation_column))
-        detail.cell(row, 3, "手工输入" if (run.scheme.amount_source or "column_total") == "manual" else "取列总额")
-        detail.cell(row, 4, float(round_money(parse_number(run.scheme.manual_amount))) if (run.scheme.amount_source or "column_total") == "manual" else float(run.target_total))
-        detail.cell(row, 5, participating)
-        detail.cell(row, 6, len(run.rows) - participating)
-        detail.cell(row, 7, float(round_money(run.base_total)))
-        detail.cell(row, 8, float(round_money(run.distributed_total)))
-        for col in range(4, 9):
+        amount_source = "手工输入" if (run.scheme.amount_source or "column_total") == "manual" else _format_amount_source_label(run.scheme)
+        difference = round_money(run.target_total - run.distributed_total)
+        summary.cell(row, 1, run.scheme.name)
+        summary.cell(row, 2, sheet_name)
+        summary.cell(row, 2).hyperlink = f"#{_sheet_reference(sheet_name)}!A1"
+        summary.cell(row, 2).style = "Hyperlink"
+        summary.cell(row, 3, get_column_letter(run.scheme.allocation_column))
+        summary.cell(row, 4, amount_source)
+        summary.cell(row, 5, float(round_money(run.target_total)))
+        summary.cell(row, 6, participating)
+        summary.cell(row, 7, len(run.rows) - participating)
+        summary.cell(row, 8, float(round_money(run.base_total)))
+        summary.cell(row, 9, float(round_money(run.distributed_total)))
+        summary.cell(row, 10, float(difference))
+        summary.cell(row, 11, run.scheme.filter_logic or "OR")
+        for col in (5, 8, 9, 10):
+            summary.cell(row, col).number_format = '#,##0.00'
+
+    summary.freeze_panes = summary.cell(summary_row + 1, 1).coordinate
+    summary.auto_filter.ref = f"A{summary_row}:K{summary_row + len(scheme_runs)}"
+    widths = [24, 24, 10, 18, 14, 10, 12, 14, 14, 12, 10]
+    for col, width in enumerate(widths, start=1):
+        summary.column_dimensions[get_column_letter(col)].width = width
+
+
+def _write_scheme_detail_sheet(
+    wb,
+    source_ws,
+    config: BatchAllocationConfig,
+    run: SchemeRun,
+    sheet_name: str,
+) -> None:
+    scheme = run.scheme
+    detail = wb.create_sheet(sheet_name)
+    detail.sheet_properties.tabColor = "70AD47"
+    detail["A1"] = f"方案明细：{scheme.name}"
+    detail["A1"].font = Font(size=15, bold=True, color="375623")
+
+    participating = sum(1 for item in run.rows if item.participates)
+    detail["A2"] = "原工作表"
+    detail["B2"] = config.sheet_name
+    detail["C2"] = "分摊列"
+    detail["D2"] = get_column_letter(scheme.allocation_column)
+    detail["E2"] = "金额来源"
+    detail["F2"] = _format_amount_source_label(scheme)
+    detail["A3"] = "待分摊金额"
+    detail["B3"] = float(round_money(run.target_total))
+    detail["C3"] = "参与行数"
+    detail["D3"] = participating
+    detail["E3"] = "不参与行数"
+    detail["F3"] = len(run.rows) - participating
+    detail["A4"] = "基数合计"
+    detail["B4"] = float(round_money(run.base_total))
+    detail["C4"] = "分摊后合计"
+    detail["D4"] = float(round_money(run.distributed_total))
+    detail["E4"] = "校验差额"
+    detail["F4"] = float(round_money(run.target_total - run.distributed_total))
+    detail["A5"] = "规则关系"
+    detail["B5"] = scheme.filter_logic or "OR"
+    for cell in ("B3", "B4", "D4", "F4"):
+        detail[cell].number_format = '#,##0.00'
+
+    source_columns = set(scheme.base_columns) | {scheme.allocation_column}
+    if scheme.amount_column:
+        source_columns.add(scheme.amount_column)
+    for rule in scheme.filter_rules or []:
+        source_columns.add(rule.column)
+    source_headers = {
+        col: normalize_value(source_ws.cell(config.header_row, col).value) or get_column_letter(col)
+        for col in source_columns
+    }
+
+    filter_summary_row = 7
+    detail.cell(filter_summary_row, 1, "过滤条件")
+    detail.cell(filter_summary_row, 1).font = Font(bold=True, color="1F4E78")
+    if scheme.filter_rules:
+        filter_headers = ["字段", "条件", "值"]
+        for col, title in enumerate(filter_headers, start=1):
+            _header(detail, filter_summary_row + 1, col, title)
+        for offset, rule in enumerate(scheme.filter_rules, start=1):
+            row = filter_summary_row + 1 + offset
+            detail.cell(row, 1, f"{get_column_letter(rule.column)}列 - {source_headers.get(rule.column, '')}")
+            detail.cell(row, 2, _operator_label(rule.operator))
+            detail.cell(row, 3, display_value(normalize_value(rule.value)))
+        table_row = filter_summary_row + len(scheme.filter_rules) + 4
+    else:
+        detail.cell(filter_summary_row + 1, 1, "无过滤条件")
+        table_row = filter_summary_row + 4
+
+    headers = ["源行号", "是否参与", "不参与原因", "过滤命中说明"]
+    headers.extend(
+        f"基数列 {get_column_letter(col)} - {source_headers[col]}"
+        for col in scheme.base_columns
+    )
+    headers.extend(
+        [
+            "分摊基数",
+            "占比",
+            f"分摊结果 {get_column_letter(scheme.allocation_column)} - {source_headers[scheme.allocation_column]}",
+        ]
+    )
+    for col, title in enumerate(headers, start=1):
+        _header(detail, table_row, col, title)
+
+    for row_offset, item in enumerate(run.rows, start=1):
+        row = table_row + row_offset
+        col = 1
+        detail.cell(row, col, item.row_number)
+        col += 1
+        detail.cell(row, col, "是" if item.participates else "否")
+        col += 1
+        detail.cell(row, col, item.reason)
+        col += 1
+        detail.cell(row, col, item.filter_value)
+        col += 1
+        for value in item.base_values:
+            detail.cell(row, col, float(value))
             detail.cell(row, col).number_format = '#,##0.00'
-
-    cursor = summary_row + len(scheme_runs) + 3
-    for run in scheme_runs:
-        scheme = run.scheme
-        detail.cell(cursor, 1, f"方案：{scheme.name}")
-        detail.cell(cursor, 2, f"分摊列 {get_column_letter(scheme.allocation_column)}")
-        detail.cell(cursor, 3, f"金额来源 { _format_amount_source_label(scheme) }")
-        detail.cell(cursor, 4, f"规则关系 {scheme.filter_logic or 'OR'}")
-        detail.cell(cursor, 5, f"参与行数 {sum(1 for item in run.rows if item.participates)}")
-        cursor += 1
-
-        source_ws = wb[config.sheet_name]
-        source_headers = {
-            col: normalize_value(source_ws.cell(config.header_row, col).value) or get_column_letter(col)
-            for col in set(scheme.base_columns) | {scheme.allocation_column}
-        }
-
-        headers = ["源行号", "是否参与", "不参与原因", "过滤列值"]
-        headers.extend(
-            f"基数列 {get_column_letter(col)} - {source_headers[col]}"
-            for col in scheme.base_columns
-        )
-        headers.extend(["分摊基数", "占比", f"分摊结果 {get_column_letter(scheme.allocation_column)} - {source_headers[scheme.allocation_column]}"])
-        for col, title in enumerate(headers, start=1):
-            _header(detail, cursor, col, title)
-
-        for row_offset, item in enumerate(run.rows, start=1):
-            row = cursor + row_offset
-            col = 1
-            detail.cell(row, col, item.row_number)
             col += 1
-            detail.cell(row, col, "是" if item.participates else "否")
-            col += 1
-            detail.cell(row, col, item.reason)
-            col += 1
-            detail.cell(row, col, item.filter_value)
-            col += 1
-            for value in item.base_values:
-                detail.cell(row, col, float(value))
-                detail.cell(row, col).number_format = '#,##0.00'
-                col += 1
-            detail.cell(row, col, float(item.effective_base))
-            detail.cell(row, col).number_format = '#,##0.00'
-            col += 1
-            detail.cell(row, col, float(item.ratio))
-            detail.cell(row, col).number_format = '0.0000%'
-            col += 1
-            detail.cell(row, col, float(item.allocations.get(scheme.allocation_column, Decimal("0"))))
-            detail.cell(row, col).number_format = '#,##0.00'
+        detail.cell(row, col, float(item.effective_base))
+        detail.cell(row, col).number_format = '#,##0.00'
+        col += 1
+        detail.cell(row, col, float(item.ratio))
+        detail.cell(row, col).number_format = '0.0000%'
+        col += 1
+        detail.cell(row, col, float(item.allocations.get(scheme.allocation_column, Decimal("0"))))
+        detail.cell(row, col).number_format = '#,##0.00'
 
-        cursor = cursor + len(run.rows) + 2
-
-    detail.freeze_panes = detail["A6"]
-    for col in range(1, 24):
+    detail.freeze_panes = detail.cell(table_row + 1, 1).coordinate
+    detail.auto_filter.ref = f"A{table_row}:{get_column_letter(len(headers))}{table_row + len(run.rows)}"
+    for col in range(1, len(headers) + 1):
         detail.column_dimensions[get_column_letter(col)].width = 16
     detail.column_dimensions["A"].width = 10
     detail.column_dimensions["B"].width = 10
     detail.column_dimensions["C"].width = 18
-    detail.column_dimensions["D"].width = 18
+    detail.column_dimensions["D"].width = 22
+
+
+def _delete_batch_detail_sheets(wb, summary_sheet_name: str) -> None:
+    for name in list(wb.sheetnames):
+        sheet = wb[name]
+        marker = normalize_value(sheet["A1"].value)
+        is_summary_name = name == summary_sheet_name or name.startswith(f"{summary_sheet_name}_")
+        if is_summary_name and marker == "费用分摊汇总":
+            del wb[name]
+        elif name == "分摊明细" and marker == "费用分摊明细":
+            del wb[name]
+        elif re.match(r"^明细_\d{2}_", name) and marker.startswith("方案明细："):
+            del wb[name]
+
+
+def _clean_sheet_name(name: str) -> str:
+    cleaned = re.sub(r"[\[\]\:\*\?\/\\]", "_", name or "明细")
+    cleaned = cleaned.strip("' ") or "明细"
+    return cleaned[:31]
+
+
+def _unique_sheet_name(base_name: str, used_names: Set[str]) -> str:
+    base_name = _clean_sheet_name(base_name)
+    if base_name not in used_names:
+        return base_name
+    for index in range(2, 1000):
+        suffix = f"_{index}"
+        candidate = f"{base_name[:31 - len(suffix)]}{suffix}"
+        if candidate not in used_names:
+            return candidate
+    raise ValueError("明细工作表名称过多，无法自动命名。")
+
+
+def _sheet_reference(sheet_name: str) -> str:
+    return "'" + sheet_name.replace("'", "''") + "'"
+
+
+def _operator_label(operator: str) -> str:
+    labels = {
+        "equals": "等于",
+        "not_equals": "不等于",
+        "contains": "包含",
+        "not_contains": "不包含",
+        "regex": "正则",
+        "blank": "为空",
+        "not_blank": "非空",
+    }
+    return labels.get(operator, operator)
 
 
 def _find_residual_row(rows: Iterable[RowAllocation]) -> Optional[RowAllocation]:

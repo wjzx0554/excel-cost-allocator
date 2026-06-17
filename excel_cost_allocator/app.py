@@ -1,4 +1,5 @@
 import sys
+import json
 import threading
 import traceback
 import tkinter as tk
@@ -20,6 +21,7 @@ from .allocator import (
     preview_filter_matches,
     preview_workbook_batch,
 )
+from .templates import import_scheme_template, serialize_scheme_template
 
 
 OPERATORS = [
@@ -336,6 +338,8 @@ class AllocatorApp(tk.Tk):
         ttk.Button(left, text="新增", command=self.add_scheme).grid(row=1, column=0, sticky=tk.EW, pady=(8, 0), padx=(0, 4))
         ttk.Button(left, text="复制", command=self.copy_scheme).grid(row=1, column=1, sticky=tk.EW, pady=(8, 0), padx=4)
         ttk.Button(left, text="删除", command=self.delete_scheme, style="Danger.TButton").grid(row=1, column=2, sticky=tk.EW, pady=(8, 0), padx=(4, 0))
+        ttk.Button(left, text="导入模板", command=self.import_scheme_template).grid(row=2, column=0, columnspan=3, sticky=tk.EW, pady=(10, 0))
+        ttk.Button(left, text="保存模板", command=self.save_scheme_template).grid(row=3, column=0, columnspan=3, sticky=tk.EW, pady=(6, 0))
 
         right = ttk.Frame(self.scheme_tab, style="App.TFrame")
         right.grid(row=0, column=1, sticky=tk.NSEW)
@@ -699,6 +703,70 @@ class AllocatorApp(tk.Tk):
         del self.schemes[index]
         self._refresh_scheme_list()
         self._load_scheme(min(index, len(self.schemes) - 1))
+
+    def save_scheme_template(self):
+        if not self.headers:
+            messagebox.showwarning("缺少表头", "请先读取表头，再保存方案模板。")
+            return
+        self._save_current_scheme()
+        path = filedialog.asksaveasfilename(
+            title="保存方案模板",
+            defaultextension=".json",
+            initialfile="分摊方案模板.json",
+            filetypes=[("方案模板", "*.json"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            template = serialize_scheme_template(
+                self.schemes,
+                self.headers,
+                sheet_name=self.sheet_name.get(),
+                header_row=int(self.header_row.get()),
+            )
+            with open(path, "w", encoding="utf-8") as file_obj:
+                json.dump(template, file_obj, ensure_ascii=False, indent=2)
+        except Exception as exc:
+            messagebox.showerror("保存失败", str(exc))
+            return
+        self.status_text.set(f"方案模板已保存：{path}")
+        messagebox.showinfo("已保存", f"方案模板已保存：\n{path}")
+
+    def import_scheme_template(self):
+        if not self.headers:
+            messagebox.showwarning("缺少表头", "请先在“基础设置”页读取当前表头，再导入模板。")
+            return
+        path = filedialog.askopenfilename(
+            title="导入方案模板",
+            filetypes=[("方案模板", "*.json"), ("所有文件", "*.*")],
+        )
+        if not path:
+            return
+        try:
+            with open(path, "r", encoding="utf-8") as file_obj:
+                template = json.load(file_obj)
+            imported = import_scheme_template(template, self.headers)
+        except Exception as exc:
+            messagebox.showerror("导入失败", str(exc))
+            return
+
+        if self.schemes:
+            replace = messagebox.askyesno(
+                "导入方案模板",
+                "是否用模板方案替换当前方案？\n\n选择“否”会追加到当前方案列表。",
+            )
+            if replace:
+                self.schemes = imported
+            else:
+                self._save_current_scheme()
+                self.schemes.extend(imported)
+        else:
+            self.schemes = imported
+
+        self._refresh_scheme_list()
+        self._load_scheme(0)
+        self.status_text.set(f"已导入 {len(imported)} 个方案模板。")
+        messagebox.showinfo("导入完成", f"已导入 {len(imported)} 个方案。")
 
     def on_scheme_selected(self, _event=None):
         selection = self.scheme_list.curselection()
@@ -1078,8 +1146,13 @@ HELP_TEXT = """分摊工具使用说明
 二、分摊方案
 一个方案代表一笔费用的一种分摊逻辑。需要分摊多笔费用时，新增多个方案即可。
 
-方案名称：用于在预览和“分摊明细”里区分不同费用。
+方案名称：用于在预览、“分摊汇总”和各方案明细页里区分不同费用。
 分摊结果列：分摊后的金额写入哪一列。建议一个方案只写一个结果列，方便财务核对。
+
+方案模板：
+保存模板：把当前所有方案保存为 .json 文件，适合月度重复使用。
+导入模板：读取以前保存的 .json 模板，按当前表头匹配列名并恢复方案。
+模板不绑定具体 Excel 文件，只保存规则；如果当前表缺少模板里的列，工具会提示缺少哪些列。
 
 三、分摊金额来源
 1. 取分摊列原始合计：把“分摊结果列”原来的合计金额拿来重新分摊。
@@ -1119,7 +1192,12 @@ AND：所有条件同时满足才不参与分摊。
 3. 占比基数合计。
 4. 分摊结果列是否正确。
 
-七、测试数据样式
+七、导出结果
+执行后会生成：
+分摊汇总：每个方案一行，显示金额来源、待分摊金额、参与行数、不参与行数、基数合计、分摊后合计和校验差额。
+明细_01_方案名称、明细_02_方案名称：每个方案一个独立明细页，显示源行号、是否参与、不参与原因、过滤命中说明、基数列、占比和分摊结果。
+
+八、测试数据样式
 日期 | 车间 | 产品名称 | 产品类别 | 完工入库材料成本 wg_materialcost | 本期人工费 laborcost | 本期共耗料 consumptioncost | 运费分摊
 2026-06 | 一车间 | A产品 | 成品 | 10000 | 3000 | 0 | 0
 2026-06 | 二车间 | B产品 | 成品 | 20000 | 5000 | 0 | 0

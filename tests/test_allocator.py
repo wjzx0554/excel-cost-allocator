@@ -15,6 +15,7 @@ from excel_cost_allocator.allocator import (
     preview_filter_matches,
     preview_workbook_batch,
 )
+from excel_cost_allocator.templates import import_scheme_template, serialize_scheme_template
 
 
 def test_allocate_with_filter_and_multiple_targets(tmp_path: Path):
@@ -180,9 +181,18 @@ def test_batch_allocation_with_manual_amount_and_different_filters(tmp_path: Pat
     assert ws["F2"].value == 75
     assert ws["F3"].value == 225
     assert ws["F4"].value == 0
-    assert "分摊明细" in out.sheetnames
-    detail = out["分摊明细"]
-    assert detail["F2"].value == 2
+    assert "分摊汇总" in out.sheetnames
+    assert "分摊明细" not in out.sheetnames
+    assert "明细_01_共耗料分摊" in out.sheetnames
+    assert "明细_02_运费分摊" in out.sheetnames
+    summary = out["分摊汇总"]
+    assert summary["A1"].value == "费用分摊汇总"
+    assert summary["B6"].value == "明细_01_共耗料分摊"
+    assert summary["B7"].value == "明细_02_运费分摊"
+    first_detail = out["明细_01_共耗料分摊"]
+    second_detail = out["明细_02_运费分摊"]
+    assert first_detail["A1"].value == "方案明细：共耗料分摊"
+    assert second_detail["A1"].value == "方案明细：运费分摊"
 
 
 def test_batch_allocation_with_source_column_amount(tmp_path: Path):
@@ -221,6 +231,37 @@ def test_batch_allocation_with_source_column_amount(tmp_path: Path):
     ws = out["sheet1"]
     assert ws["E2"].value == 1000
     assert ws["E3"].value == 2000
+
+
+def test_batch_detail_export_preserves_user_named_detail_sheet(tmp_path: Path):
+    input_path = tmp_path / "preserve_user_sheet.xlsx"
+    output_path = tmp_path / "preserve_user_sheet_out.xlsx"
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "sheet1"
+    ws.append(["车间", "材料", "共耗料"])
+    ws.append(["一车间", 100, 0])
+    user_sheet = wb.create_sheet("明细_01_共耗料分摊")
+    user_sheet["A1"] = "用户自建明细"
+    wb.save(input_path)
+
+    config = BatchAllocationConfig(
+        input_path=str(input_path),
+        output_path=str(output_path),
+        sheet_name="sheet1",
+        header_row=1,
+        schemes=[
+            AllocationScheme("共耗料分摊", "manual", 3, [2], manual_amount=100),
+        ],
+    )
+
+    allocate_workbook_batch(config)
+
+    out = load_workbook(output_path, data_only=True)
+    assert out["明细_01_共耗料分摊"]["A1"].value == "用户自建明细"
+    assert "明细_01_共耗料分摊_2" in out.sheetnames
+    assert out["分摊汇总"]["B6"].value == "明细_01_共耗料分摊_2"
 
 
 def test_batch_allocation_rejects_duplicate_target_column(tmp_path: Path):
@@ -328,3 +369,127 @@ def test_create_sample_workbook(tmp_path: Path):
     assert ws["A1"].value == "日期"
     assert ws["B4"].value == "销售配货部"
     assert ws.max_column == 8
+
+
+def test_scheme_template_round_trip_by_current_headers(tmp_path: Path):
+    path = tmp_path / "template.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "sheet1"
+    ws.append(["车间", "材料", "人工", "待分摊运费", "运费分摊"])
+    ws.append(["一车间", 100, 100, 1000, 0])
+    wb.save(path)
+
+    headers = get_headers(str(path), "sheet1", 1)
+    schemes = [
+        {
+            "name": "运费分摊",
+            "amount_mode": "source_column",
+            "amount_column": headers[3].label,
+            "manual_amount": "",
+            "allocation_column": headers[4].label,
+            "base_columns": [headers[1].label, headers[2].label],
+            "filter_logic": "OR",
+            "filter_rules": [
+                {"column": headers[0].label, "operator": "equals", "value": "销售配货部"}
+            ],
+        }
+    ]
+
+    template = serialize_scheme_template(schemes, headers, "sheet1", 1)
+    imported = import_scheme_template(template, headers)
+
+    assert imported == schemes
+
+
+def test_scheme_template_rejects_missing_columns(tmp_path: Path):
+    path = tmp_path / "template_missing.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "sheet1"
+    ws.append(["车间", "材料", "运费分摊"])
+    ws.append(["一车间", 100, 0])
+    wb.save(path)
+
+    headers = get_headers(str(path), "sheet1", 1)
+    template = {
+        "version": 1,
+        "template_type": "allocation_schemes",
+        "schemes": [
+            {
+                "name": "运费分摊",
+                "amount_mode": "source_column",
+                "amount_column": {"label": "D列 - 待分摊运费", "header": "待分摊运费"},
+                "manual_amount": "",
+                "allocation_column": {"label": "E列 - 运费分摊", "header": "运费分摊"},
+                "base_columns": [
+                    {"label": "B列 - 材料", "header": "材料"},
+                    {"label": "C列 - 人工", "header": "人工"},
+                ],
+                "filter_logic": "OR",
+                "filter_rules": [
+                    {
+                        "column": {"label": "A列 - 车间", "header": "车间"},
+                        "operator": "equals",
+                        "value": "销售配货部",
+                    }
+                ],
+            }
+        ],
+    }
+
+    try:
+        import_scheme_template(template, headers)
+    except ValueError as exc:
+        assert "待分摊运费" in str(exc)
+        assert "人工" in str(exc)
+    else:
+        raise AssertionError("Expected missing template columns to be rejected")
+
+
+def test_scheme_template_rejects_invalid_template_values(tmp_path: Path):
+    path = tmp_path / "template_invalid.xlsx"
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "sheet1"
+    ws.append(["车间", "材料", "费用"])
+    ws.append(["一车间", 100, 0])
+    wb.save(path)
+
+    headers = get_headers(str(path), "sheet1", 1)
+    wrong_type = {"template_type": "other", "schemes": []}
+    try:
+        import_scheme_template(wrong_type, headers)
+    except ValueError as exc:
+        assert "模板类型不匹配" in str(exc)
+    else:
+        raise AssertionError("Expected wrong template type to be rejected")
+
+    invalid_values = {
+        "template_type": "allocation_schemes",
+        "schemes": [
+            {
+                "name": "方案1",
+                "amount_mode": "bad_mode",
+                "allocation_column": {"label": headers[2].label, "header": headers[2].header},
+                "base_columns": [{"label": headers[1].label, "header": headers[1].header}],
+                "filter_logic": "XOR",
+                "filter_rules": [
+                    {
+                        "column": {"label": headers[0].label, "header": headers[0].header},
+                        "operator": "bad_operator",
+                        "value": "销售配货部",
+                    }
+                ],
+            }
+        ],
+    }
+
+    try:
+        import_scheme_template(invalid_values, headers)
+    except ValueError as exc:
+        assert "金额来源类型无效" in str(exc)
+        assert "过滤规则关系无效" in str(exc)
+        assert "过滤条件类型无效" in str(exc)
+    else:
+        raise AssertionError("Expected invalid template values to be rejected")
