@@ -45,7 +45,7 @@ jobs:
 
       - name: Build exe
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --icon assets\app.ico --add-data "assets\app.ico;assets" --name FanchanTool main.py
+          pyinstaller --noconfirm --clean --onefile --windowed --icon assets\app.ico --add-data "assets;assets" --name FanchanTool main.py
           mkdir release
           copy dist\FanchanTool.exe release\${{ matrix.exe_name }}
 

@@ -192,6 +192,7 @@ class AllocatorApp(tk.Tk):
         self.active_scheme_index = -1
         self.filter_rule_rows = []
         self.unique_value_cache = {}
+        self.help_contact_image = None
         self._loading_scheme = False
 
         self._build_ui()
@@ -519,13 +520,39 @@ class AllocatorApp(tk.Tk):
     def _build_help_tab(self):
         self.help_tab.columnconfigure(0, weight=1)
         self.help_tab.rowconfigure(0, weight=1)
-        text = tk.Text(self.help_tab, wrap=tk.WORD, bg="#ffffff", fg="#1f2937", relief=tk.SOLID, bd=1, padx=14, pady=12)
+        text = tk.Text(
+            self.help_tab,
+            wrap=tk.WORD,
+            bg="#ffffff",
+            fg="#1f2937",
+            relief=tk.SOLID,
+            bd=1,
+            padx=18,
+            pady=16,
+            spacing1=3,
+            spacing3=8,
+        )
         text.grid(row=0, column=0, sticky=tk.NSEW)
         help_scroll = ttk.Scrollbar(self.help_tab, orient=tk.VERTICAL, command=text.yview)
         help_scroll.grid(row=0, column=1, sticky=tk.NS)
         text.configure(yscrollcommand=help_scroll.set)
+        text.tag_configure("center", justify=tk.CENTER)
+        text.tag_configure("intro_gap", spacing3=14)
+        self._insert_help_contact_image(text)
         text.insert(tk.END, HELP_TEXT)
         text.configure(state=tk.DISABLED)
+
+    def _insert_help_contact_image(self, text):
+        image_path = self._asset_path("contact_qr.png")
+        if not image_path.exists():
+            return
+        try:
+            self.help_contact_image = tk.PhotoImage(file=str(image_path))
+        except tk.TclError:
+            return
+        text.insert(tk.END, "\n", "center")
+        text.image_create(tk.END, image=self.help_contact_image, padx=0, pady=4)
+        text.insert(tk.END, "\n\n", ("center", "intro_gap"))
 
     def _create_listbox(self, parent, height=10):
         return tk.Listbox(
