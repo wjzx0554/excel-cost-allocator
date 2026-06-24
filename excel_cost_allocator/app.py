@@ -168,8 +168,8 @@ class AllocatorApp(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("分摊工具")
-        self.geometry("1180x800")
-        self.minsize(1060, 720)
+        self.geometry("1120x700")
+        self.minsize(980, 640)
         self.configure(bg="#eef3f8")
         self._set_window_icon()
         self._setup_style()
@@ -193,6 +193,7 @@ class AllocatorApp(tk.Tk):
         self.filter_rule_rows = []
         self.unique_value_cache = {}
         self._loading_scheme = False
+        self.run_buttons = []
 
         self._build_ui()
 
@@ -275,10 +276,13 @@ class AllocatorApp(tk.Tk):
 
         action_frame = ttk.Frame(root, style="App.TFrame")
         action_frame.pack(fill=tk.X, pady=(10, 0))
-        ttk.Label(action_frame, textvariable=self.status_text, style="Status.TLabel").pack(side=tk.LEFT, fill=tk.X, expand=True)
-        ttk.Button(action_frame, text="生成预览", command=self.preview_allocation).pack(side=tk.RIGHT, padx=(8, 0))
-        self.run_button = ttk.Button(action_frame, text="开始分摊", command=self.run_allocation, style="Primary.TButton")
+        action_buttons = ttk.Frame(action_frame, style="App.TFrame")
+        action_buttons.pack(side=tk.RIGHT)
+        self.run_button = ttk.Button(action_buttons, text="开始分摊", command=self.run_allocation, style="Primary.TButton")
         self.run_button.pack(side=tk.RIGHT)
+        self.run_buttons.append(self.run_button)
+        ttk.Button(action_buttons, text="生成预览", command=self.preview_allocation).pack(side=tk.RIGHT, padx=(0, 8))
+        ttk.Label(action_frame, textvariable=self.status_text, style="Status.TLabel").pack(side=tk.LEFT, fill=tk.X, expand=True)
 
     def _build_base_tab(self):
         self.base_tab.columnconfigure(0, weight=1)
@@ -471,7 +475,15 @@ class AllocatorApp(tk.Tk):
             text="先生成预览，确认每个方案的金额、参与行数、基数合计和分摊列，再执行导出。",
             style="Card.TLabel",
         ).pack(side=tk.LEFT)
-        ttk.Button(toolbar, text="生成预览", command=self.preview_allocation).pack(side=tk.RIGHT)
+        self.preview_run_button = ttk.Button(
+            toolbar,
+            text="开始分摊",
+            command=self.run_allocation,
+            style="Primary.TButton",
+        )
+        self.preview_run_button.pack(side=tk.RIGHT)
+        self.run_buttons.append(self.preview_run_button)
+        ttk.Button(toolbar, text="生成预览", command=self.preview_allocation).pack(side=tk.RIGHT, padx=(0, 8))
 
         table_frame = ttk.LabelFrame(self.preview_tab, text="方案预览", padding=10, style="Card.TLabelframe")
         table_frame.grid(row=1, column=0, sticky=tk.NSEW, pady=(10, 0))
@@ -928,7 +940,7 @@ class AllocatorApp(tk.Tk):
             return
 
         self.status_text.set("正在生成预览...")
-        self.run_button.configure(state=tk.DISABLED)
+        self._set_run_buttons_state(tk.DISABLED)
 
         def worker():
             try:
@@ -942,13 +954,13 @@ class AllocatorApp(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _preview_finished(self, result):
-        self.run_button.configure(state=tk.NORMAL)
+        self._set_run_buttons_state(tk.NORMAL)
         self._fill_preview_tree(result)
         self.notebook.select(self.preview_tab)
         self.status_text.set("预览完成，请核对后执行分摊。")
 
     def _preview_failed(self, error):
-        self.run_button.configure(state=tk.NORMAL)
+        self._set_run_buttons_state(tk.NORMAL)
         self.status_text.set("预览失败。")
         messagebox.showerror("预览失败", error)
 
@@ -959,7 +971,7 @@ class AllocatorApp(tk.Tk):
             messagebox.showwarning("配置不完整", str(exc))
             return
 
-        self.run_button.configure(state=tk.DISABLED)
+        self._set_run_buttons_state(tk.DISABLED)
         self.status_text.set("正在分摊，请稍候...")
 
         def worker():
@@ -974,7 +986,7 @@ class AllocatorApp(tk.Tk):
         threading.Thread(target=worker, daemon=True).start()
 
     def _allocation_finished(self, result):
-        self.run_button.configure(state=tk.NORMAL)
+        self._set_run_buttons_state(tk.NORMAL)
         self._fill_preview_tree(result)
         self.notebook.select(self.preview_tab)
         summary = "\n".join(
@@ -990,9 +1002,13 @@ class AllocatorApp(tk.Tk):
         )
 
     def _allocation_failed(self, error):
-        self.run_button.configure(state=tk.NORMAL)
+        self._set_run_buttons_state(tk.NORMAL)
         self.status_text.set("分摊失败。")
         messagebox.showerror("分摊失败", error)
+
+    def _set_run_buttons_state(self, state):
+        for button in self.run_buttons:
+            button.configure(state=state)
 
     def _fill_preview_tree(self, result):
         for item in self.preview_tree.get_children():
