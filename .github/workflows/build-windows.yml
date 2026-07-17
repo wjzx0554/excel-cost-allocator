@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Build Flet Windows EXE
 
 on:
   push:
@@ -7,22 +7,12 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
-    name: Build ${{ matrix.arch }}
+    name: Build Flet x64
     runs-on: windows-2022
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86
-            artifact: FanchanTool-win-x86
-            exe_name: FanchanTool-win-x86.exe
-          - arch: x64
-            artifact: FanchanTool-win-x64
-            exe_name: FanchanTool-win-x64.exe
 
     steps:
       - name: Checkout
@@ -32,45 +22,90 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: "3.8"
-          architecture: ${{ matrix.arch }}
+          architecture: x64
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade "pip<25"
-          pip install -r requirements.txt
-          pip install -r requirements-dev.txt
+          python -m pip install -r requirements-dev.txt
 
       - name: Run tests
-        run: python -m pytest
-
-      - name: Build exe
         run: |
-          pyinstaller --noconfirm --clean --onefile --windowed --icon assets\app.ico --add-data "assets;assets" --name FanchanTool main.py
-          mkdir release
-          copy dist\FanchanTool.exe release\${{ matrix.exe_name }}
+          python -m py_compile flet_app.py
+          python -c "import flet, flet_desktop, flet_app"
+          python -m pytest
+
+      - name: Verify release tag
+        if: ${{ github.ref_type == 'tag' }}
+        shell: pwsh
+        run: |
+          $appVersion = python -c "from excel_cost_allocator import __version__; print(__version__)"
+          if ("v$appVersion" -ne "${{ github.ref_name }}") {
+            throw "Tag ${{ github.ref_name }} does not match app version v$appVersion"
+          }
+
+      - name: Build Flet exe
+        shell: pwsh
+        run: |
+          $appVersion = python -c "from excel_cost_allocator import __version__; print(__version__)"
+          flet pack flet_app.py `
+            --yes `
+            --name FanchanTool `
+            --icon assets\app.ico `
+            --add-data "assets;assets" `
+            --product-name "FanchanTool" `
+            --file-description "Excel/WPS Cost Allocation Tool" `
+            --product-version $appVersion `
+            --file-version "$appVersion.0"
+
+          New-Item -ItemType Directory -Force -Path release | Out-Null
+          Copy-Item -LiteralPath dist\FanchanTool.exe -Destination release\FanchanTool-win-x64.exe
+
+      - name: Smoke test package
+        shell: pwsh
+        run: |
+          $exe = Resolve-Path release\FanchanTool-win-x64.exe
+          if ((Get-Item -LiteralPath $exe).Length -lt 1MB) {
+            throw "Packaged executable is unexpectedly small: $exe"
+          }
+          $bytes = [System.IO.File]::ReadAllBytes($exe)
+          $peOffset = [BitConverter]::ToInt32($bytes, 0x3C)
+          $machine = [BitConverter]::ToUInt16($bytes, $peOffset + 4)
+          if ($machine -ne 0x8664) {
+            throw "Expected AMD64 PE machine 0x8664, got 0x$($machine.ToString('X4'))"
+          }
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.artifact }}
-          path: release\*.exe
+          name: FanchanTool-win-x64
+          path: release/FanchanTool-win-x64.exe
+          if-no-files-found: error
+          compression-level: 0
 
   release:
     name: Publish release assets
     runs-on: windows-2022
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: ${{ github.ref_type == 'tag' && startsWith(github.ref_name, 'v') }}
+    permissions:
+      contents: write
     steps:
       - name: Download build artifacts
         uses: actions/download-artifact@v4
         with:
-          pattern: FanchanTool-*
+          name: FanchanTool-win-x64
           path: release-files
-          merge-multiple: true
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: release-files/*.exe
+          files: release-files/FanchanTool-win-x64.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

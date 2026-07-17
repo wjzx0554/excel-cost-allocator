@@ -1,3 +1,5 @@
 -r requirements.txt
+flet[cli]==0.25.2
+pyinstaller==5.13.2
+pyinstaller-hooks-contrib==2025.10
 pytest==8.3.5
-

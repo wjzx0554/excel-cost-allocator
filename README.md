@@ -100,15 +100,15 @@
 
 ## GitHub 自动打包
 
-把整个项目上传到 GitHub 后，GitHub Actions 会在每次 push 或手动运行时自动生成 Windows exe。
+把整个项目上传到 GitHub 后，GitHub Actions 会在每次 push 或手动运行时，用 `flet_app.py` 自动生成新版 Flet UI 的 Windows x64 exe。
 
 普通 push 或手动运行时，GitHub Actions 的 `Artifacts` 仍会以 zip 形式保存构建产物，这是 GitHub Actions 的默认机制。
 
 如果希望用户直接下载 `.exe`，请打一个版本标签发布 Release：
 
 ```powershell
-git tag v0.2.0
-git push origin v0.2.0
+git tag v0.3.0
+git push origin v0.3.0
 ```
 
 发布后下载位置：
@@ -117,17 +117,24 @@ git push origin v0.2.0
 2. 进入 `Releases`。
 3. 打开对应版本。
 4. 在 `Assets` 里直接下载：
-   - `FanchanTool-win-x86.exe`：32 位版本，适合 Win7 32 位，也可在 Win7 64 位运行。
-   - `FanchanTool-win-x64.exe`：64 位版本，适合数据量较大且系统是 Win7 64 位的电脑。
+   - `FanchanTool-win-x64.exe`：64 位 Flet UI 版本，适合数据量较大的电脑。
 
 ## 本地开发运行
 
 ```powershell
 python -m venv .venv
 .venv\Scripts\activate
-pip install -r requirements-dev.txt
-python main.py
+python -m pip install -r requirements-dev.txt
+python flet_app.py
 ```
+
+本地打包新版 UI：
+
+```powershell
+flet pack flet_app.py --yes --name FanchanTool --icon assets\app.ico --add-data "assets;assets"
+```
+
+生成的单文件程序位于 `dist\FanchanTool.exe`。旧版 Tkinter 入口 `main.py` 仍保留，但 GitHub Actions 默认打包的是 `flet_app.py`。
 
 ## 运行测试
 
@@ -135,10 +142,10 @@ python main.py
 python -m pytest
 ```
 
-## Win7 兼容说明
+## Windows 兼容说明
 
-项目使用 Python 3.8 和 Tkinter。Python 3.8 是最后一代适合 Win7 的官方 Python 主版本；GitHub Actions 使用 `windows-2022` 作为构建环境，并固定 Python 3.8 和 PyInstaller 4.10，尽量避免高版本运行时破坏 Win7 兼容性。
+新版界面固定使用 Python 3.8、Flet 0.25.2 和 PyInstaller 5.13.2 构建。Flet 桌面程序包含 Flutter 窗口运行时，建议在 64 位 Windows 10 / 11 使用。
 
-Win7 机器如果缺少系统运行库，可能需要安装 Microsoft Visual C++ 2015-2019 Redistributable 或系统补丁。通常 32 位 exe 兼容面更广，64 位 exe 处理大文件更稳。
+Flet 0.25.2 在 PyPI 上虽然存在名为 `win32` 的轮子，但其中的桌面运行时实际仍是 AMD64，不能作为可运行的 32 位程序发布，因此自动构建只生成 x64 新版 UI。
 
-注意：GitHub 已在 2025-06-30 退役 `windows-2019` 托管环境，所以自动构建不能继续使用 `windows-2019`。PyInstaller 官方文档对 Win7 的表述是“应该可用，但不正式支持”。所以项目同时构建 x86 和 x64 两个版本，建议先在目标 Win7 电脑上试 x86 版本；如果要求 100% 按 Win7 环境构建，需要改用一台 Win7/Win10 老系统电脑作为 self-hosted runner。
+若必须支持 Windows 7 或 32 位 Windows，请继续使用旧版 Tkinter 入口 `main.py` 并单独构建和验收；GitHub Actions 默认发布的 Flet 新版 UI 不支持这些环境。
