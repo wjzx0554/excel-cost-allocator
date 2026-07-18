@@ -107,8 +107,8 @@
 如果希望用户直接下载 `.exe`，请打一个版本标签发布 Release：
 
 ```powershell
-git tag v0.3.0
-git push origin v0.3.0
+git tag v0.3.1
+git push origin v0.3.1
 ```
 
 发布后下载位置：

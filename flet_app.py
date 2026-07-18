@@ -408,7 +408,7 @@ class FletAllocatorApp:
         )
 
     def _build_layout(self) -> ft.Control:
-        self.views = ft.Stack(
+        self.views = ft.Column(
             [
                 self._build_base_tab(),
                 self._build_scheme_tab(),
@@ -416,6 +416,7 @@ class FletAllocatorApp:
                 self._build_help_tab(),
             ],
             expand=True,
+            spacing=0,
         )
         for index, view in enumerate(self.views.controls):
             view.visible = index == 0
@@ -634,9 +635,7 @@ class FletAllocatorApp:
                     ),
                     sample_button,
                 ],
-                wrap=True,
                 spacing=12,
-                run_spacing=8,
                 vertical_alignment=ft.CrossAxisAlignment.CENTER,
             ),
             ft.icons.SCIENCE_OUTLINED,
@@ -874,9 +873,7 @@ class FletAllocatorApp:
                     preview_button,
                     run_button,
                 ],
-                wrap=True,
                 spacing=10,
-                run_spacing=8,
             ),
             ft.icons.VERIFIED_OUTLINED,
         )
@@ -962,9 +959,7 @@ class FletAllocatorApp:
                             preview_button,
                             run_button,
                         ],
-                        wrap=True,
                         spacing=10,
-                        run_spacing=8,
                         vertical_alignment=ft.CrossAxisAlignment.CENTER,
                     ),
                 ],
